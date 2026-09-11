@@ -219,6 +219,30 @@ iptables -S | grep f2b
 
 ---
 
+## A mail relay that sends fine but cannot write its own log
+
+`msmtp` (or a similar relay) delivers mail successfully — `smtpstatus=250` — while printing:
+
+```
+send-mail: cannot log to /var/log/msmtp.log: cannot open: Permission denied
+```
+
+Two causes stack here, and fixing only the obvious one leaves you puzzled.
+
+**The binary is setgid.** `/usr/bin/msmtp` ships as `-rwxr-sr-x root msmtp`, so it runs with group `msmtp`, not as your user. A log file owned `root:root` with mode `600` is unreachable for it. `chown root:msmtp` plus `660` fixes that half.
+
+**AppArmor confines it anyway.** Ubuntu ships a profile that permits logs only under `@{HOME}/.msmtp*.log`. Ownership changes do not help:
+
+```bash
+journalctl -k --since "5 min ago" | grep -i "apparmor.*DENIED"
+```
+
+A third wrinkle makes this genuinely confusing: the profile can be **loaded and enforcing in the kernel while marked disabled on disk** (a symlink in `/etc/apparmor.d/disable`). `apparmor_parser -r` then refuses with "Skipping profile in /etc/apparmor.d/disable" and your local override is never applied, while the running profile keeps denying.
+
+Point the log at a path the profile already permits (`/root/.msmtp.log` when running as root) rather than unloading the profile. Weakening confinement of the program that talks to the outside world, for the sake of a log file, is a bad trade.
+
+---
+
 ## Opening a second SSH port without extending the jail
 
 Adding `Port 2222` for networks that block 22 also creates an unprotected brute-force surface, because the jail watches only the port it was configured with.

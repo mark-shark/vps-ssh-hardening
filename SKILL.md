@@ -119,6 +119,7 @@ Adapt rather than run blind — hosts differ.
 - `scripts/harden-ssh.sh` — hardening with rollback timer, validation, and fresh-connection verification
 - `scripts/healthcheck.sh` — periodic check, human log plus JSON for other tools
 - `scripts/swiftbar-plugin.sh` — macOS menu-bar indicator reading that JSON
+- `scripts/email-digest.py` — daily HTML digest by mail, for when the workstation is off
 
 ## Reporting honestly
 

@@ -219,6 +219,30 @@ iptables -S | grep f2b
 
 ---
 
+## Odesílač pošty maily posílá, ale nedokáže psát vlastní log
+
+`msmtp` (nebo podobný relay) mail úspěšně doručí — `smtpstatus=250` — a přitom vypíše:
+
+```
+send-mail: cannot log to /var/log/msmtp.log: cannot open: Permission denied
+```
+
+Sčítají se tu dvě příčiny a oprava jen té zjevné nechá člověka v nejistotě.
+
+**Binárka je setgid.** `/usr/bin/msmtp` má práva `-rwxr-sr-x root msmtp`, takže běží se skupinou `msmtp`, ne pod tvým uživatelem. Na log vlastněný `root:root` s právy `600` nedosáhne. `chown root:msmtp` a `660` spraví tuhle polovinu.
+
+**AppArmor ho ale stejně omezuje.** Ubuntu dodává profil, který povoluje logy jen pod `@{HOME}/.msmtp*.log`. Změna vlastnictví nepomůže:
+
+```bash
+journalctl -k --since "5 min ago" | grep -i "apparmor.*DENIED"
+```
+
+Třetí zádrhel to dělá opravdu matoucím: profil může být **načtený a vynucovaný v jádře, zatímco na disku je označený jako vypnutý** (symlink v `/etc/apparmor.d/disable`). `apparmor_parser -r` pak odmítne s „Skipping profile in /etc/apparmor.d/disable", tvoje lokální výjimka se nikdy neuplatní — a běžící profil dál zamítá.
+
+Nasměruj log tam, kam profil zapisovat povoluje (`/root/.msmtp.log` při běhu pod rootem), místo abys profil odstraňoval. Oslabit izolaci programu, který komunikuje ven, kvůli logovacímu souboru je špatný obchod.
+
+---
+
 ## Otevření druhého SSH portu bez rozšíření jailu
 
 Přidání `Port 2222` pro sítě blokující 22 zároveň vytvoří nechráněný terč pro brute-force, protože jail hlídá jen port, se kterým byl nakonfigurovaný.

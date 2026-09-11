@@ -60,6 +60,56 @@ Treat stale data as its own alarm: if the JSON timestamp is older than roughly 1
 
 Useful states: OK, warning, failure, and *stale*. Rendering only the first three hides the case where nothing has run for a day.
 
+## E-mail, for when the workstation is off
+
+A menu-bar indicator only works while you are looking at that machine. A daily digest sent from the server covers the rest, and it is the only channel that survives you being on holiday.
+
+`scripts/email-digest.py` renders the same data as an HTML mail. Three decisions in it are worth keeping if you write your own:
+
+**One digest, not a mail per event.** A server on the open internet is banned dozens of times a day. Per-event mail stops being read within a week, and an alert nobody reads is worse than no alert, because it feels like coverage.
+
+**Lead with the verdict, not the numbers.** Subject and headline say *all clear* / *needs attention* / *problem*; the counts are below. Accent colour carries the same signal, so the state is legible before a word is read.
+
+**The section worth reading daily is successful logins** — who got in, from where, with which method. Ban counts are noise; an unexpected login is not.
+
+### Getting mail out of a server
+
+Most minimal VPS images have no MTA at all. Two routes:
+
+- **A relay** (`msmtp` plus `msmtp-mta`) forwarding through an SMTP provider you already use. One small package, no listening daemon.
+- **Direct sending** (postfix). Expect poor deliverability: hosting IP ranges are widely blocklisted and mail without SPF/DKIM alignment is junked. Not worth it for alerts you need to arrive.
+
+If the machine already runs an application that sends mail, its configuration usually holds working credentials. Copying a secret **between files on the server** keeps it out of your terminal history and out of any transcript:
+
+```bash
+grep -m1 '^SMTP_PASSWORD=' /path/to/app/.env | cut -d= -f2- | tr -d '"' > /etc/msmtp-password
+chmod 600 /etc/msmtp-password
+```
+
+Environment variable names differ between projects (`SMTP_PASSWORD` vs `SMTP_PASS`, `SMTP_USERNAME` vs `SMTP_USER`). Grepping for one spelling and finding nothing is not evidence that mail is unconfigured — list the keys before concluding anything.
+
+### Two traps specific to msmtp
+
+`/usr/bin/msmtp` is **setgid** to group `msmtp`, so it does not run as your user and cannot write a log owned `root:root` with mode `600`. And Ubuntu's AppArmor profile permits logs only under `@{HOME}/.msmtp*.log`, so fixing ownership alone changes nothing. Point the log at a permitted path rather than unloading the profile — `references/pitfalls.md` has the full shape, including the case where the profile is enforcing in the kernel while marked disabled on disk.
+
+### HTML that survives real mail clients
+
+Outlook on Windows renders through Word: no flex, no grid, no `<style>` rules beyond the basics. Everything structural has to be a `<table>` with inline styles. Send `multipart/alternative` so a text client and a watch notification still get something readable.
+
+If you embed a header image, the structure matters:
+
+```
+multipart/related
+├── multipart/alternative
+│   ├── text/plain
+│   └── text/html
+└── image/png   <content-id>
+```
+
+The image must be a **sibling** of the alternative part, not inside it — some clients will not resolve the `cid:` reference otherwise and show a broken image. Mark it `Content-Disposition: inline` or it appears as an attachment. Keep a text-header fallback for when the asset is missing; an empty strip with a broken-image icon looks worse than plain text.
+
+Set `Auto-Submitted: auto-generated` so out-of-office autoresponders do not reply to a robot.
+
 ## Notifications on macOS
 
 `osascript -e 'display notification …'` is the obvious approach and frequently does nothing. Notifications are delivered under the identity of a registered application, and the interpreter may not be registered — the command exits 0 having shown nothing.
