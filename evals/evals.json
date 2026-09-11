@@ -1,0 +1,58 @@
+{
+  "skill_name": "vps-ssh-hardening",
+  "evals": [
+    {
+      "id": 0,
+      "name": "closed-port-misdiagnosis",
+      "prompt": "Our Grafana box is a Debian 12 VPS at Hetzner and I've been locked out of SSH for about 40 minutes. From my laptop nmap says: 22/tcp closed ssh conn-refused, 3000/tcp open (Grafana loads fine in the browser), everything else filtered. So sshd died or failed to start, right? Our provider console is throwing an error when I open it. Write up your diagnosis and what I should do, save it to diagnosis.md",
+      "expected_output": "Should NOT conclude sshd is down. Must flag that a connect scan (-sT) cannot distinguish a fail2ban REJECT from a dead service because the OS reports ECONNREFUSED for both, and that port 2222-style 'closed' ports prove nothing. Should propose checking from inside (ActiveEnterTimestamp, fail2ban.log) or a SYN scan, and list alternate ways in.",
+      "files": [],
+      "assertions": [
+        "Does NOT conclude that sshd is down/crashed as the answer",
+        "Explains a connect scan cannot distinguish a firewall REJECT from no listener (OS reports ECONNREFUSED for both)",
+        "Treats an IP-level ban as one of the top two most likely causes, not merely mentioned then dismissed",
+        "Names a SYN scan (-sS) specifically as the way to tell a REJECT from a dead listener from outside",
+        "Warns that continuing to retry SSH can renew or extend a ban, AND explicitly instructs the user to stop retrying",
+        "Suggests looking for a surviving session or ControlMaster socket as a route in before it expires",
+        "States explicitly which question cannot be settled from outside, instead of presenting a ranked guess as the diagnosis",
+        "Names the specific inside checks that settle ban-vs-dead-daemon (sshd start timestamp AND the fail2ban log), not just 'check the logs'",
+        "Verifies restored access on a connection that bypasses multiplexing (names ControlPath or ControlMaster)"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "harden-without-lockout",
+      "prompt": "I've got a fresh Ubuntu VPS I use for a couple of client sites. Right now I log in as root with a password and I know that's bad. I want key-only login, fail2ban and a firewall. Give me the exact steps in the right order, save it as hardening-plan.md. I'm on a MacBook and I really can't afford to lock myself out, the sites are live.",
+      "expected_output": "Must verify key auth BEFORE disabling passwords, arrange a rollback (systemd-run timer or equivalent), whitelist own IP in fail2ban before testing, validate with sshd -t, use reload not restart, add ufw rule for 22 before enabling, and verify with a fresh connection (ControlPath=none). Should mention KbdInteractiveAuthentication no and a rescue key.",
+      "files": [],
+      "assertions": [
+        "Treats the key-auth check as a hard gate: says explicitly not to proceed to disabling passwords if it fails",
+        "Arms an automatic rollback that fires without user action (systemd-run/at/cron timer), not merely keeping a second session open",
+        "Whitelists own IP in fail2ban ignoreip before failure testing AND states the reason (verification generates failed auths from your own IP)",
+        "Validates with sshd -t AND verifies the effective setting afterwards (sshd -T or an external auth-method probe)",
+        "Uses reload rather than restart so existing sessions survive",
+        "Adds the SSH firewall rule before enabling AND checks which ports the live services actually listen on first",
+        "Verifies with a fresh connection that explicitly bypasses multiplexing (names ControlPath or ControlMaster)",
+        "Sets KbdInteractiveAuthentication no AND explains that PAM otherwise leaves a password path open",
+        "Recommends a second, distinct rescue key kept off the working machine AND says to verify it works before relying on it",
+        "Checks for a lower-numbered drop-in (e.g. 50-cloud-init.conf) that would override the hardening"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "accepts-key-then-denied",
+      "prompt": "Něco nechápu. Když se připojuju na server, ssh -v mi vypíše 'debug1: Server accepts key: /Users/me/.ssh/id_ed25519_server ED25519 SHA256:1oog...' a hned za tím 'Permission denied (publickey)'. Klíč jsem tam už dvakrát nahrával znovu přes ssh-copy-id, práva na .ssh mám 700 a authorized_keys 600. Používám to ve skriptu s BatchMode=yes. Napiš mi do odpoved.md co s tím.",
+      "expected_output": "Must recognise that 'Server accepts key' means the key IS authorized and the failure is at the signing step — a passphrase-protected key not loaded in the agent, silently unusable under BatchMode. Should NOT advise re-deploying the key again. Should suggest ssh-keygen -y -P '' test, ssh-add -l, and ssh-add --apple-use-keychain.",
+      "files": [],
+      "assertions": [
+        "States the key is authorized AND draws the explicit conclusion that copying it again cannot help",
+        "Identifies passphrase-plus-BatchMode as the LEADING cause, not one of several equally ranked possibilities",
+        "Gives a diagnostic that discriminates between the candidate causes, not merely a command to inspect the key",
+        "Gives a fix suited to non-interactive use (dedicated passphrase-less key, or an agent guaranteed reachable from the script)",
+        "Warns that the repeatedly failing script will trip fail2ban, and says to stop it before testing",
+        "Verifies the fix on a connection that bypasses an existing ControlMaster (ControlPath=none)",
+        "Distinguishes a client-side signing failure from a server-side rejection using a concrete signal"
+      ]
+    }
+  ]
+}
