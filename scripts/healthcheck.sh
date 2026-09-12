@@ -76,10 +76,14 @@ if [ $SSH_RC -ne 0 ]; then
     level="FAIL"
     problems="  [FAIL] SSH unreachable (rc=$SSH_RC): $(echo "$DATA" | tail -1)"$'\n'
 else
-    for k in disk_pct mem_avail load1 cores svc_nginx svc_ssh svc_fail2ban svc_ufw \
-             passauth reboot banned cert_days cert_name; do
-        eval "$k=\$(echo \"\$DATA\" | awk -F= -v K=\"\$k\" '\$1==K{print \$2; exit}')"
-    done
+    # One pass over the expected keys. Two lines longer than an awk-per-key
+    # loop, but it spawns one process instead of thirteen every run.
+    while IFS='=' read -r k v; do
+        case "$k" in
+            disk_pct|mem_avail|load1|cores|svc_nginx|svc_ssh|svc_fail2ban|svc_ufw|\
+            passauth|reboot|banned|cert_days|cert_name) eval "$k=\$v" ;;
+        esac
+    done <<<"$DATA"
 
     [ "${disk_pct:-0}" -ge "$DISK_FAIL" ] && note FAIL "Disk full: ${disk_pct}%" \
         || { [ "${disk_pct:-0}" -ge "$DISK_WARN" ] && note WARN "Disk: ${disk_pct}%"; }
@@ -113,56 +117,53 @@ dom_total=0; dom_bad=0
 prev_slow=$(cat "$SLOW_STATE" 2>/dev/null || true)
 cur_slow=""
 if [ -f "$DOMAINS_FILE" ]; then
-    TMPD=$(mktemp -d 2>/dev/null || echo "")
-    if [ -n "$TMPD" ]; then
-        # In parallel: serial checks cost one timeout per domain.
-        while read -r d; do
-            case "$d" in ''|\#*) continue ;; esac
-            dom_total=$((dom_total+1))
-            (
-                r=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' \
-                        --max-time "$HTTP_TIMEOUT" "https://$d" 2>/dev/null)
-                echo "$d|$?|$r" > "$TMPD/$dom_total"
-            ) &
-        done < "$DOMAINS_FILE"
-        wait
+    TMPD=$(mktemp -d) || exit 1
+    # In parallel: serial checks cost one timeout per domain.
+    while read -r d; do
+        case "$d" in ''|\#*) continue ;; esac
+        dom_total=$((dom_total+1))
+        (
+            r=$(curl -s -o /dev/null -w '%{http_code} %{time_total}' \
+                    --max-time "$HTTP_TIMEOUT" "https://$d" 2>/dev/null)
+            echo "$d|$?|$r" > "$TMPD/$dom_total"
+        ) &
+    done < "$DOMAINS_FILE"
+    wait
 
-        for f in "$TMPD"/*; do
-            [ -e "$f" ] || continue
-            IFS='|' read -r d rc r < "$f"
-            code=$(echo "$r" | awk '{print $1}')
-            secs=$(echo "$r" | awk '{print $2}')
-            if [ "${rc:-1}" != "0" ]; then
-                # A curl exit code is unreadable in a notification; translate it.
-                case "$rc" in
-                    6)  why="DNS did not resolve" ;;
-                    7)  why="connection refused" ;;
-                    28) why="timeout (>${HTTP_TIMEOUT}s)" ;;
-                    35) why="TLS handshake failed" ;;
-                    51|60) why="bad or expired certificate" ;;
-                    *)  why="curl rc=$rc" ;;
-                esac
-                note FAIL "$d: $why"; dom_bad=$((dom_bad+1))
-            elif [ "${code:-0}" -ge 500 ] 2>/dev/null; then
-                note FAIL "$d: HTTP $code"; dom_bad=$((dom_bad+1))
-            elif [ "${code:-0}" -ge 400 ] 2>/dev/null; then
-                note WARN "$d: HTTP $code"; dom_bad=$((dom_bad+1))
-            else
-                slow=$(echo "${secs:-0} $HTTP_SLOW_WARN" | awk '{print ($1 > $2) ? 1 : 0}')
-                if [ "$slow" = "1" ]; then
-                    cur_slow="${cur_slow}${d}"$'\n'
-                    # Only on the second consecutive reading: one slow response
-                    # is usually a backend waking from idle, not a problem.
-                    if printf '%s' "$prev_slow" | grep -qxF "$d" 2>/dev/null; then
-                        note WARN "$d: slow response ${secs}s (2 in a row)"
-                    fi
+    for f in "$TMPD"/*; do
+        [ -e "$f" ] || continue
+        IFS='|' read -r d rc r < "$f"
+        read -r code secs <<<"$r"
+        if [ "${rc:-1}" != "0" ]; then
+            # A curl exit code is unreadable in a notification; translate it.
+            case "$rc" in
+                6)  why="DNS did not resolve" ;;
+                7)  why="connection refused" ;;
+                28) why="timeout (>${HTTP_TIMEOUT}s)" ;;
+                35) why="TLS handshake failed" ;;
+                51|60) why="bad or expired certificate" ;;
+                *)  why="curl rc=$rc" ;;
+            esac
+            note FAIL "$d: $why"; dom_bad=$((dom_bad+1))
+        elif [ "${code:-0}" -ge 500 ] 2>/dev/null; then
+            note FAIL "$d: HTTP $code"; dom_bad=$((dom_bad+1))
+        elif [ "${code:-0}" -ge 400 ] 2>/dev/null; then
+            note WARN "$d: HTTP $code"; dom_bad=$((dom_bad+1))
+        else
+            slow=$(echo "${secs:-0} $HTTP_SLOW_WARN" | awk '{print ($1 > $2) ? 1 : 0}')
+            if [ "$slow" = "1" ]; then
+                cur_slow="${cur_slow}${d}"$'\n'
+                # Only on the second consecutive reading: one slow response
+                # is usually a backend waking from idle, not a problem.
+                if printf '%s' "$prev_slow" | grep -qxF "$d" 2>/dev/null; then
+                    note WARN "$d: slow response ${secs}s (2 in a row)"
                 fi
             fi
-        done
-        # Written after all domains are evaluated, so a crash cannot truncate it.
-        printf '%s' "$cur_slow" > "$SLOW_STATE"
-        rm -rf "$TMPD"
-    fi
+        fi
+    done
+    # Written after all domains are evaluated, so a crash cannot truncate it.
+    printf '%s' "$cur_slow" > "$SLOW_STATE"
+    rm -rf "$TMPD"
 fi
 
 # --- output ----------------------------------------------------------------
